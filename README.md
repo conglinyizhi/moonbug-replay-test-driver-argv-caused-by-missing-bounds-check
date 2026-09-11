@@ -4,6 +4,18 @@
 `parse_args` 里直接裸索引 argv，没有任何长度检查，于是**任何不是
 `file:start-end` 形状的参数都会 panic → abort**，退出码 134 并留下 core。
 
+## 这个仓库的作用与分层
+
+仓库里有两个层次的东西，作用不同：
+
+| 层次 | 文件 | 行数 | 依赖 | 目的 |
+|---|---|---|---|---|
+| **最小复现（MRE）** | `moon.mod` `moon.pkg` `a.mbt` `a_test.mbt` | 9 | **零依赖** | 让人手工复现、能直接贴进 issue |
+| **可执行规格** | `cases.mbtx` `Makefile` `.github/` | 355 | `moonbitlang/async@0.21.3` | 自动断言；上游修好后 CI 会转红 |
+
+规格比本体大一个数量级，**这不是冗余，是两个不同目的**：前者求最短理解路径，
+后者求可回归。**复现本身不需要任何第三方依赖** —— 依赖只出现在跑断言的时候。
+
 ## 出问题的两处
 
 `_build/native/debug/test/__generated_driver_for_blackbox_test.mbt`：
