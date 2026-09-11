@@ -1,0 +1,249 @@
+///|
+import {
+  "moonbitlang/async@0.21.3",
+  "moonbitlang/async@0.21.3/process",
+  "moonbitlang/async@0.21.3/fs",
+  "moonbitlang/core/env",
+}
+
+///|
+/// 生成的 native 测试驱动不做参数校验 —— 用例集
+///
+///   moon run cases.mbtx                 跑 bug lane + workaround lane（= verify）
+///   moon run cases.mbtx -- bug          只跑命中问题 lane
+///   moon run cases.mbtx -- workaround   只跑绕过 lane
+///   moon run cases.mbtx -- fixed        修复验收 lane
+///   moon run cases.mbtx -- list         列出用例及其自带预期
+///   moon run cases.mbtx -- diagnose     打印生成源码里出问题的两行
+///
+/// 环境变量：MOON（moon 可执行文件，默认 $HOME/.moon/bin/moon）
+///           FIX_CC（编译 native 用的 C 编译器，默认 gcc）
+
+///|
+extern "c" fn c_exit(code : Int) = "exit"
+
+///|
+struct Case {
+  name : String
+  argv : Array[String]
+  expect : Int
+  desc : String
+}
+
+///|
+fn all_cases() -> Array[Case] {
+  [
+    { name: "no-args", argv: [], expect: 134, desc: "不带任何参数" },
+    { name: "help", argv: ["--help"], expect: 134, desc: "--help" },
+    { name: "plain-word", argv: ["foo"], expect: 134, desc: "无冒号的普通词" },
+    { name: "file-only", argv: ["a_test.mbt"], expect: 134, desc: "只有文件名，没有 :start-end" },
+    { name: "well-formed", argv: ["a_test.mbt:1-3"], expect: 0, desc: "格式正确，应正常执行" },
+    { name: "two-ranges", argv: ["a_test.mbt:1-3/a_test.mbt:1-3"], expect: 0, desc: "两个区间，应正常执行" },
+  ]
+}
+
+///|
+fn env_or(key : String, fallback : String) -> String {
+  match @env.get_env_var(key) {
+    Some(v) => v
+    None => fallback
+  }
+}
+
+///|
+fn moon_exe() -> String {
+  env_or("MOON", env_or("HOME", "/root") + "/.moon/bin/moon")
+}
+
+///|
+fn fix_cc() -> String {
+  env_or("FIX_CC", "gcc")
+}
+
+///|
+/// @process 用负数表示「被信号 N 杀死」（-N）；统一成 shell 的 128+N 约定，
+/// 这样预期值可以直接写 134 而不用关心是谁在观测。
+fn norm_exit(code : Int) -> Int {
+  if code < 0 { 128 - code } else { code }
+}
+
+///|
+fn pad(s : String, n : Int) -> String {
+  if s.length() >= n { s } else { s.pad_end(n, ' ') }
+}
+
+///|
+fn tail_lines(text : String, keep : Int) -> String {
+  let lines = text.split("\n").collect()
+  let start = if lines.length() > keep { lines.length() - keep } else { 0 }
+  let buf = StringBuilder()
+  let mut i = start
+  while i < lines.length() {
+    buf.write_string("    ")
+    buf.write_string(lines[i].to_owned())
+    buf.write_string("\n")
+    i = i + 1
+  }
+  buf.to_string()
+}
+
+///|
+async fn find_driver() -> String? {
+  let dir = "_build/native/debug/test"
+  if !@fs.exists(dir) { return None }
+  for n in @fs.readdir(dir) {
+    if n.contains(".blackbox_test.exe") { return Some(dir + "/" + n) }
+  }
+  None
+}
+
+///|
+async fn prepare() -> String? {
+  let (code, _, err) = @process.collect_output(
+    moon_exe(),
+    ["test", "--target", "native"],
+    extra_env={ "MOON_CC": fix_cc() },
+  )
+  if code != 0 {
+    println("prepare 失败：构建测试驱动没成功（exit=\{code}）")
+    println("提示：native 编译需要 MOON_CC（默认按 FIX_CC=gcc 传入）；")
+    println("      若 PATH 里存在名为 cl 的可执行文件，也会挡住 native 编译。")
+    println(tail_lines(try! err.text(), 8))
+    return None
+  }
+  find_driver()
+}
+
+///|
+async fn driver_or_exit() -> String {
+  match prepare() {
+    Some(d) => d
+    None => {
+      println("prepare 失败，终止")
+      c_exit(2)
+      "" // 不会到达
+    }
+  }
+}
+
+///|
+async fn run_one(c : Case, driver : String) -> (Int, String) {
+  let (code, _, err) = @process.collect_output(driver, c.argv)
+  (code, try! err.text())
+}
+
+///|
+async fn run_lane(kind : String, driver : String) -> Int {
+  let mut fails = 0
+  match kind {
+    "bug" => println("命中问题 lane —— 畸形参数期望 exit 134（PanicError → abort）")
+    "workaround" => println("绕过 lane —— 参数按 file:start-end 形状给，期望 exit 0")
+    "fixed" => println("修复验收 lane —— 期望畸形参数不再 abort（上游修好后转 PASS）")
+    _ => ()
+  }
+  let list = all_cases()
+  for c in list {
+    let is_malformed = c.expect == 134
+    let selected = match kind {
+      "bug" | "fixed" => is_malformed
+      "workaround" => !is_malformed
+      _ => false
+    }
+    if !selected { continue }
+    let (raw, err) = run_one(c, driver)
+    let code = norm_exit(raw)
+    let ok = match kind {
+      "fixed" => code != 134
+      _ =>
+        if is_malformed {
+          code == 134 && err.contains("PanicError")
+        } else {
+          code == 0
+        }
+    }
+    let note = if ok {
+      "PASS"
+    } else if kind == "fixed" {
+      "FAIL (仍 abort)"
+    } else {
+      "FAIL (期望 \{c.expect})"
+    }
+    println(
+      "  \{pad(c.name, 12)} exit=\{pad(code.to_string(), 4)} \{pad(note, 18)} \{c.desc}",
+    )
+    if !ok {
+      fails = fails + 1
+      let first = err.split("\n").collect()[0].to_owned()
+      if first != "" { println("         stderr: \{first}") }
+    }
+  }
+  fails
+}
+
+///|
+fn list_cases() -> Unit {
+  println("\{pad("CASE", 12)} \{pad("EXPECT", 7)} 说明")
+  let list = all_cases()
+  for c in list {
+    println("\{pad(c.name, 12)} \{pad(c.expect.to_string(), 7)} \{c.desc}")
+  }
+}
+
+///|
+async fn moon_version() -> String {
+  let (_, out, _) = @process.collect_output(moon_exe(), ["version"])
+  try! out.text()
+}
+
+///|
+async fn diagnose(driver : String) -> Unit {
+  println("moon      : \{moon_exe()}")
+  println("            \{moon_version()}")
+  println("测试可执行: \{driver}")
+  let gen = "_build/native/debug/test/__generated_driver_for_blackbox_test.mbt"
+  if @fs.exists(gen) {
+    let lines = try! (@fs.read_file(gen)).text().split("\n").collect()
+    println("驱动源码  : \{gen}")
+    println("--- 两处裸索引（行号:内容）---")
+    let mut i = 0
+    while i < lines.length() {
+      let l = lines[i].to_owned()
+      if l.contains("cli_args[1]") || l.contains("file_and_range[1]") {
+        println("    \{i + 1}:\{l.trim()}")
+      }
+      i = i + 1
+    }
+  }
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  let cmd = if args.length() > 1 { args[1] } else { "verify" }
+  let driver = driver_or_exit()
+  let fails = match cmd {
+    "list" => {
+      list_cases()
+      0
+    }
+    "diagnose" => {
+      diagnose(driver)
+      0
+    }
+    "bug" => run_lane("bug", driver)
+    "workaround" => run_lane("workaround", driver)
+    "fixed" => run_lane("fixed", driver)
+    "verify" => {
+      let a = run_lane("bug", driver)
+      let b = run_lane("workaround", driver)
+      if a + b == 0 { println("== 两条 lane 全部通过 ==") } else { println("== 有失败：\{a + b} 条 ==") }
+      a + b
+    }
+    _ => {
+      println("未知子命令：\{cmd}")
+      println("可用：bug | workaround | fixed | list | diagnose（不带参数 = verify）")
+      2
+    }
+  }
+  c_exit(if fails == 0 { 0 } else { 1 })
+}

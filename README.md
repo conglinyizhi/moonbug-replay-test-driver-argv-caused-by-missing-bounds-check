@@ -32,7 +32,7 @@ for arg in test_args {
 
 ```bash
 $ moon test --target native                     # 构建正常，测试通过
-$ ./_build/native/debug/test/<pkg>.blackbox_test.exe
+$ ./_build/native/debug/test/drv.blackbox_test.exe
 PanicError
     at @repro/drv_blackbox_test.moonbit_test_driver_internal_native_parse_args (...:331)
     at moonbit_main (...:490)
@@ -55,18 +55,47 @@ $ echo $?
 
 ## 复现
 
+harness 是一个单文件 `.mbtx`：`moon run cases.mbtx -- <子命令>`，没有 `cases.sh`。
+它自己起进程、拿退出码、比对预期，外壳里几乎没有逻辑。
+
 ```bash
-make diagnose    # 构建驱动并打印出问题的两处生成源码
-make verify      # 命中问题 lane + 绕过 lane
+make verify      # 命中问题 lane + 绕过 lane，本地应全绿
 make bug         # 只跑命中问题 lane
+make workaround  # 只跑绕过 lane
+make fixed       # 修复验收 lane（上游修好后转 PASS）
+make cases       # 列出用例及其自带预期
+make diagnose    # 打印生成源码里出问题的两行
 ```
+
+等价直跑：
+
+```bash
+moon run cases.mbtx -- verify
+moon run cases.mbtx -- bug
+```
+
+harness 用 `moonbitlang/async@0.21.3` 的 process API
+（`collect_output` 直接返回退出码与 stdout/stderr），首次运行会从 mooncakes.io 取该依赖。
+
+## 用例
+
+| case | argv | 期望 |
+|---|---|---|
+| `no-args` | 不带参数 | 134 |
+| `help` | `--help` | 134 |
+| `plain-word` | `foo` | 134 |
+| `file-only` | `a_test.mbt` | 134 |
+| `well-formed` | `a_test.mbt:1-3` | 0 |
+| `two-ranges` | `a_test.mbt:1-3/a_test.mbt:1-3` | 0 |
+
+命中问题 lane 还额外要求 stderr 里出现 `PanicError`，避免把「恰好也是 134」当成通过。
 
 ## 注意
 
-- 本仓库**需要 `MOON_CC` 才能编译**（`cases.sh` 内部默认用 `FIX_CC=gcc`），
-  因为姊妹仓库的归档器问题会挡住 native 编译：
-  `moonbug-replay-native-build-fails-caused-by-lib-exe-archiver`。
-  上游如果修了那个，用 `FIX_CC` 覆盖或直接去掉也可以。
+- **需要 `MOON_CC`**：本仓库要编译 native。`Makefile` 默认按 `FIX_CC=gcc` 传入，
+  可用 `make FIX_CC=clang ...` 覆盖。原因见姊妹仓库
+  `moonbug-replay-native-build-fails-caused-by-lib-exe-archiver`
+  —— PATH 里存在名为 `cl` 的可执行文件时，native 编译会被误判成 MSVC 环境。
 - abort 会触发 core dump，且 `ulimit -c 0` 压不住（systemd-coredump 的 pipe 模式
   忽略 RLIMIT_CORE）。清理：`sudo coredumpctl vacuum --size=50M`。
 
