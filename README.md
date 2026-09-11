@@ -77,6 +77,10 @@ moon run cases.mbtx -- bug
 harness 用 `moonbitlang/async@0.21.3` 的 process API
 （`collect_output` 直接返回退出码与 stdout/stderr），首次运行会从 mooncakes.io 取该依赖。
 
+因为 `.mbtx` 的依赖要靠 registry 索引解析，**全新环境需要先同步一次索引**。`make` 的
+各 lane 都依赖 `make deps`（内部 `moon update --quiet`），所以一般不用手动做；
+离线时 `deps` 会失败但不中断，改用本地缓存继续。
+
 ## 用例
 
 | case | argv | 期望 |
