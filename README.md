@@ -54,7 +54,7 @@ moon test --target native                        # 构建，顺带生成测试�
 ```
 
 第一行在部分机器上需要 `MOON_CC`（原因见姊妹仓库
-`moonbug-replay-native-build-fails-caused-by-lib-exe-archiver`）：
+[moonbug-replay-native-build-fails-caused-by-lib-exe-archiver](https://github.com/conglinyizhi/moonbug-replay-native-build-fails-caused-by-lib-exe-archiver)）：
 
 ```bash
 MOON_CC=gcc moon test --target native
@@ -137,3 +137,15 @@ moon 0.1.20260907 (7aabba5 2026-09-07)
 moonc v0.10.12+8a549c039-nightly (2026-09-06)
 Linux x86-64
 ```
+
+### 相关上游 issue
+
+在 [moonbitlang/moon](https://github.com/moonbitlang/moon) 里搜 `parse_args`、`blackbox_test`
+均为 **0 命中**，没有找到描述该问题的既有 issue —— 大概率是新问题。
+
+目标仓库就是 **[moonbitlang/moon](https://github.com/moonbitlang/moon)**（测试驱动是 moon
+自己生成的）。`moonbitlang/moonbit-compiler` 的 issue 是**关闭**的。
+
+姊妹仓库（`MOON_CC` 那个前置条件的原因）：
+[SIGABRT/断管仓库](https://github.com/conglinyizhi/moonbug-replay-broken-pipe-caused-by-panic-abort)、
+[cl 误判仓库](https://github.com/conglinyizhi/moonbug-replay-native-build-fails-caused-by-lib-exe-archiver)
